@@ -1527,6 +1527,14 @@ public:
   void
   renumber_dofs(std::vector<types::global_dof_index> &renumbering,
                 const unsigned int                    dof_handler_index = 0);
+  /**
+   * @brief update_categorization
+   * @param additional_data
+   */
+  template <typename DoFHandlerType>
+  void
+  update_categorization(const std::vector<const DoFHandlerType *> &dof_handler,
+                        const AdditionalData &additional_data);
 
   //@}
 
@@ -2906,6 +2914,72 @@ MatrixFree<dim, Number, VectorizedArrayType>::reinit(
                   additional_data);
 }
 
+template <int dim, typename Number, typename VectorizedArrayType>
+template <typename DoFHandlerType>
+void
+MatrixFree<dim, Number, VectorizedArrayType>::update_categorization(
+  const std::vector<const DoFHandlerType *> &dof_handler,
+  const AdditionalData &                     additional_data)
+{
+  Assert(this->mapping_is_initialized, ExcNotInitialized());
+
+  // Dummy object, which is not required in this special case
+  const AffineConstraints<double>                dummy;
+  std::vector<const AffineConstraints<double> *> constraints({&dummy, &dummy});
+  std::vector<IndexSet>                          locally_owned_set =
+    internal::MatrixFreeImplementation::extract_locally_owned_index_sets(
+      dof_handler, additional_data.mg_level);
+
+  Assert(dof_handler.size() > 0, ExcMessage("No DoFHandler is given."));
+  AssertDimension(dof_handler.size(), constraints.size());
+  AssertDimension(dof_handler.size(), locally_owned_set.size());
+  task_info.clear();
+  dof_info.clear();
+  dof_handlers.dof_handler.clear();
+  cell_level_index.clear();
+  indices_are_initialized = false;
+
+  // set variables that are independent of FE
+  if (Utilities::MPI::job_supports_mpi() == true)
+    {
+      const parallel::TriangulationBase<dim> *dist_tria =
+        dynamic_cast<const parallel::TriangulationBase<dim> *>(
+          &(dof_handler[0]->get_triangulation()));
+      task_info.communicator =
+        dist_tria != nullptr ? dist_tria->get_communicator() : MPI_COMM_SELF;
+      task_info.my_pid =
+        Utilities::MPI::this_mpi_process(task_info.communicator);
+      task_info.n_procs =
+        Utilities::MPI::n_mpi_processes(task_info.communicator);
+    }
+  else
+    {
+      task_info.communicator = MPI_COMM_SELF;
+      task_info.my_pid       = 0;
+      task_info.n_procs      = 1;
+    }
+
+  initialize_dof_handlers(dof_handler, additional_data);
+  for (unsigned int no = 0; no < dof_handler.size(); ++no)
+    {
+      dof_info[no].store_plain_indices = additional_data.store_plain_indices;
+      dof_info[no].global_base_element_offset =
+        no > 0 ? dof_info[no - 1].global_base_element_offset +
+                   dof_handler[no - 1]->get_fe(0).n_base_elements() :
+                 0;
+    }
+
+  task_info.scheme = internal::MatrixFreeFunctions::TaskInfo::none;
+
+
+  // 1) recompute internal data structures due to modified categorization
+  if (additional_data.initialize_indices == true)
+    this->initialize_indices(constraints, locally_owned_set, additional_data);
+
+  // 2) apply changes in mapping info
+  if (additional_data.initialize_mapping == true)
+    mapping_info.recategorize(cell_level_index, face_info);
+}
 
 
 template <int dim, typename Number, typename VectorizedArrayType>

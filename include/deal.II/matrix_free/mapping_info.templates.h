@@ -372,6 +372,52 @@ namespace internal
 
     template <int dim, typename Number, typename VectorizedArrayType>
     void
+    MappingInfo<dim, Number, VectorizedArrayType>::recategorize(
+      std::vector<std::pair<unsigned int, unsigned int>> cell_level_index,
+      const FaceInfo<VectorizedArrayType::size()> &      faces)
+    {
+      constexpr unsigned int n_lanes = VectorizedArrayType::size();
+      const unsigned int     n_quads = face_data_by_cells.size();
+
+      // Resize types
+      cell_type.resize(cell_level_index.size() / n_lanes);
+      face_type.resize(faces.faces.size());
+
+      // loop over all quad formulas
+      for (uint my_quad = 0; my_quad < n_quads; ++my_quad)
+        {
+          // Set data index offset to zero, quad to iterator value
+          cell_data[my_quad].data_index_offsets.resize(cell_type.size());
+          cell_data[my_quad].quadrature_point_offsets.resize(cell_type.size());
+
+          for (uint i = 0; i < cell_data[my_quad].data_index_offsets.size();
+               ++i)
+            {
+              cell_data[my_quad].data_index_offsets[i]       = 0;
+              cell_data[my_quad].quadrature_point_offsets[i] = i;
+            }
+
+          // Set data index offset to zero, quad to iterator value
+          face_data[my_quad].data_index_offsets.resize(face_type.size());
+          face_data_by_cells[my_quad].data_index_offsets.resize(
+            cell_type.size() * GeometryInfo<dim>::faces_per_cell);
+          face_data_by_cells[my_quad].quadrature_point_offsets.resize(
+            cell_type.size() * GeometryInfo<dim>::faces_per_cell);
+
+          for (uint i = 0; i < face_data[my_quad].data_index_offsets.size();
+               ++i)
+            {
+              face_data[my_quad].data_index_offsets[i]                = 0;
+              face_data_by_cells[my_quad].data_index_offsets[i]       = i;
+              face_data_by_cells[my_quad].quadrature_point_offsets[i] = i;
+            }
+        }
+    }
+
+
+
+    template <int dim, typename Number, typename VectorizedArrayType>
+    void
     MappingInfo<dim, Number, VectorizedArrayType>::update_mapping(
       const dealii::Triangulation<dim> &                        tria,
       const std::vector<std::pair<unsigned int, unsigned int>> &cells,

@@ -336,6 +336,12 @@ namespace internal
         const UpdateFlags update_flags_inner_faces,
         const UpdateFlags update_flags_faces_by_cells);
 
+
+      void
+      recategorize(
+        std::vector<std::pair<unsigned int, unsigned int>> cell_level_index,
+        const FaceInfo<VectorizedArrayType::size()> &      faces);
+
       /**
        * Update the information in the given cells and faces that is the
        * result of a change in the given `mapping` class, keeping the cells,
