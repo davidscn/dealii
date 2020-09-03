@@ -1311,6 +1311,8 @@ MatrixFree<dim, Number, VectorizedArrayType>::initialize_indices(
                                constraint_pool_row_index,
                                irregular_cells);
 
+  auto face_info_temp = face_info;
+
   // Finally resort the faces and collect several faces for vectorization
   if ((additional_data.mapping_update_flags_inner_faces |
        additional_data.mapping_update_flags_boundary_faces) != update_default)

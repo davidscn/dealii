@@ -637,6 +637,9 @@ public:
   std::array<unsigned int, VectorizedArrayType::size()>
   get_cell_ids() const;
 
+  std::array<unsigned int, VectorizedArrayType::n_array_elements>
+  get_cell_or_face_ids() const;
+
   //@}
 
   /**
@@ -2950,6 +2953,85 @@ public:
    * points is inaccurate and this value must be used instead.
    */
   const unsigned int n_q_points;
+
+private:
+  std::array<unsigned int, VectorizedArrayType::n_array_elements>
+  compute_face_no_data()
+  {
+    std::array<unsigned int, VectorizedArrayType::n_array_elements>
+      face_no_data;
+
+
+    if (this->dof_access_index ==
+        internal::MatrixFreeFunctions::DoFInfo::dof_access_cell)
+      {
+        if (this->is_interior_face == true)
+          {
+            std::fill(
+              face_no_data.begin(),
+              face_no_data.begin() +
+                this->dof_info->n_vectorization_lanes_filled
+                  [internal::MatrixFreeFunctions::DoFInfo::dof_access_cell]
+                  [this->cell],
+              this->face_no);
+          }
+        else
+          {
+            std::fill(face_no_data.begin(),
+                      face_no_data.end(),
+                      numbers::invalid_unsigned_int);
+
+            for (unsigned int i = 0;
+                 i < this->dof_info->n_vectorization_lanes_filled
+                       [internal::MatrixFreeFunctions::DoFInfo::dof_access_cell]
+                       [this->cell];
+                 i++)
+              {
+                // compute actual (non vectorized) cell ID
+                const unsigned int cell_this =
+                  this->cell * VectorizedArrayType::n_array_elements + i;
+                // compute face ID
+                const unsigned int face_index =
+                  this->matrix_info->get_cell_and_face_to_plain_faces()(
+                    this->cell, this->face_no, i);
+
+                Assert(face_index != numbers::invalid_unsigned_int,
+                       ExcNotInitialized());
+
+                // get cell ID on both sides of face
+                auto cell_m =
+                  this->matrix_info
+                    ->get_face_info(face_index /
+                                    VectorizedArrayType::n_array_elements)
+                    .cells_interior[face_index %
+                                    VectorizedArrayType::n_array_elements];
+
+                // compare the IDs with the given cell ID
+                face_no_data[i] =
+                  (cell_m == cell_this) ?
+                    this->matrix_info
+                      ->get_face_info(face_index /
+                                      VectorizedArrayType::n_array_elements)
+                      .exterior_face_no :
+                    this->matrix_info
+                      ->get_face_info(face_index /
+                                      VectorizedArrayType::n_array_elements)
+                      .interior_face_no;
+              }
+          }
+      }
+    else
+      {
+        std::fill(
+          face_no_data.begin(),
+          face_no_data.begin() +
+            this->dof_info->n_vectorization_lanes_filled[this->dof_access_index]
+                                                        [this->cell],
+          this->face_no);
+      }
+
+    return face_no_data;
+  }
 };
 
 
@@ -3644,6 +3726,65 @@ template <int dim,
           typename Number,
           bool is_face,
           typename VectorizedArrayType>
+std::array<unsigned int, VectorizedArrayType::n_array_elements>
+FEEvaluationBase<dim, n_components_, Number, is_face, VectorizedArrayType>::
+  get_cell_or_face_ids() const
+{
+  const unsigned int v_len = VectorizedArrayType::n_array_elements;
+  std::array<unsigned int, VectorizedArrayType::n_array_elements> cells;
+
+  // initialize array
+  for (unsigned int i = 0; i < v_len; ++i)
+    cells[i] = numbers::invalid_unsigned_int;
+
+  if (is_face &&
+      this->dof_access_index ==
+        internal::MatrixFreeFunctions::DoFInfo::dof_access_cell &&
+      this->is_interior_face == false)
+    {
+      // cell-based face-loop: plus face
+      for (unsigned int i = 0; i < v_len; i++)
+        {
+          // compute actual (non vectorized) cell ID
+          const unsigned int cell_this = this->cell * v_len + i;
+          // compute face ID
+          unsigned int fn =
+            this->matrix_info->get_cell_and_face_to_plain_faces()(this->cell,
+                                                                  this->face_no,
+                                                                  i);
+
+          if (fn == numbers::invalid_unsigned_int)
+            continue; // invalid face ID: no neighbor on boundary
+
+          // get cell ID on both sides of face
+          auto cell_m = this->matrix_info->get_face_info(fn / v_len)
+                          .cells_interior[fn % v_len];
+          auto cell_p = this->matrix_info->get_face_info(fn / v_len)
+                          .cells_exterior[fn % v_len];
+
+          // compare the IDs with the given cell ID
+          if (cell_m == cell_this)
+            cells[i] = cell_p; // neighbor has the other ID
+          else if (cell_p == cell_this)
+            cells[i] = cell_m;
+        }
+    }
+  else
+    {
+      for (unsigned int i = 0; i < v_len; ++i)
+        cells[i] = cell * v_len + i;
+    }
+
+  return cells;
+}
+
+
+
+template <int dim,
+          int n_components_,
+          typename Number,
+          bool is_face,
+          typename VectorizedArrayType>
 inline VectorizedArrayType
 FEEvaluationBase<dim, n_components_, Number, is_face, VectorizedArrayType>::
   read_cell_data(const AlignedVector<VectorizedArrayType> &array) const
@@ -4193,10 +4334,14 @@ FEEvaluationBase<dim, n_components_, Number, is_face, VectorizedArrayType>::
 
   // Simple case: We have contiguous storage, so we can simply copy out the
   // data
-  if (dof_info->index_storage_variants[ind][cell] ==
-        internal::MatrixFreeFunctions::DoFInfo::IndexStorageVariants::
-          interleaved_contiguous &&
-      n_lanes == VectorizedArrayType::size())
+  if ((dof_info->index_storage_variants[ind][cell] ==
+         internal::MatrixFreeFunctions::DoFInfo::IndexStorageVariants::
+           interleaved_contiguous &&
+       n_lanes == VectorizedArrayType::size()) &&
+      !(is_face &&
+        this->dof_access_index ==
+          internal::MatrixFreeFunctions::DoFInfo::dof_access_cell &&
+        this->is_interior_face == false))
     {
       const unsigned int dof_index =
         dof_indices_cont[cell * VectorizedArrayType::size()] +
@@ -4220,6 +4365,9 @@ FEEvaluationBase<dim, n_components_, Number, is_face, VectorizedArrayType>::
       return;
     }
 
+  std::array<unsigned int, VectorizedArrayType::n_array_elements> cells =
+    this->get_cell_or_face_ids();
+
   // More general case: Must go through the components one by one and apply
   // some transformations
   const unsigned int n_filled_lanes =
@@ -4228,19 +4376,23 @@ FEEvaluationBase<dim, n_components_, Number, is_face, VectorizedArrayType>::
   unsigned int dof_indices[VectorizedArrayType::size()];
   for (unsigned int v = 0; v < n_filled_lanes; ++v)
     dof_indices[v] =
-      dof_indices_cont[cell * VectorizedArrayType::size() + v] +
+      dof_indices_cont[cells[v]] +
       dof_info->component_dof_indices_offset[active_fe_index]
                                             [first_selected_component] *
-        dof_info->dof_indices_interleave_strides
-          [ind][cell * VectorizedArrayType::size() + v];
+        dof_info->dof_indices_interleave_strides[ind][cells[v]];
 
   for (unsigned int v = n_filled_lanes; v < VectorizedArrayType::size(); ++v)
     dof_indices[v] = numbers::invalid_unsigned_int;
 
+  const bool is_ecl =
+    this->dof_access_index ==
+      internal::MatrixFreeFunctions::DoFInfo::dof_access_cell &&
+    this->is_interior_face == false;
+
   // In the case with contiguous cell indices, we know that there are no
   // constraints and that the indices within each element are contiguous
   if (n_filled_lanes == VectorizedArrayType::size() &&
-      n_lanes == VectorizedArrayType::size())
+      n_lanes == VectorizedArrayType::size() && !is_ecl)
     {
       if (dof_info->index_storage_variants[ind][cell] ==
           internal::MatrixFreeFunctions::DoFInfo::IndexStorageVariants::
@@ -7441,6 +7593,13 @@ FEFaceEvaluation<dim,
   if (!(evaluate_values + evaluate_gradients))
     return;
 
+  const unsigned int face_no =
+    (this->dof_access_index ==
+       internal::MatrixFreeFunctions::DoFInfo::dof_access_cell &&
+     this->is_interior_face == false) ?
+      compute_face_no_data()[0] :
+      this->face_no;
+
   internal::FEFaceEvaluationSelector<
     dim,
     fe_degree,
@@ -7454,7 +7613,7 @@ FEFaceEvaluation<dim,
                                    this->scratch_data,
                                    evaluate_values,
                                    evaluate_gradients,
-                                   this->face_no,
+                                   face_no,
                                    this->subface_index,
                                    this->face_orientation,
                                    this->mapping_data
@@ -7515,6 +7674,13 @@ FEFaceEvaluation<dim,
   if (!(integrate_values + integrate_gradients))
     return;
 
+  const unsigned int face_no =
+    (this->dof_access_index ==
+       internal::MatrixFreeFunctions::DoFInfo::dof_access_cell &&
+     this->is_interior_face == false) ?
+      compute_face_no_data()[0] :
+      this->face_no;
+
   internal::FEFaceEvaluationSelector<
     dim,
     fe_degree,
@@ -7528,7 +7694,7 @@ FEFaceEvaluation<dim,
                                     this->scratch_data,
                                     integrate_values,
                                     integrate_gradients,
-                                    this->face_no,
+                                    face_no,
                                     this->subface_index,
                                     this->face_orientation,
                                     this->mapping_data
@@ -7565,7 +7731,17 @@ FEFaceEvaluation<
                 "evaluating to a pointer to basic number (float,double). "
                 "Use read_dof_values() followed by evaluate() instead.");
 
-  if (!internal::FEFaceEvaluationSelector<dim,
+  const unsigned int face_no =
+    (this->dof_access_index ==
+       internal::MatrixFreeFunctions::DoFInfo::dof_access_cell &&
+     this->is_interior_face == false) ?
+      compute_face_no_data()[0] :
+      this->face_no;
+
+  if ((this->dof_access_index ==
+         internal::MatrixFreeFunctions::DoFInfo::dof_access_cell &&
+       this->is_interior_face == false) ||
+      !internal::FEFaceEvaluationSelector<dim,
                                           fe_degree,
                                           n_q_points_1d,
                                           n_components,
@@ -7582,7 +7758,7 @@ FEFaceEvaluation<
                         this->active_fe_index,
                         this->first_selected_component,
                         this->cell,
-                        this->face_no,
+                        face_no,
                         this->subface_index,
                         this->dof_access_index,
                         this->face_orientation,
@@ -7631,6 +7807,13 @@ FEFaceEvaluation<
                 "Use integrate() followed by distribute_local_to_global() "
                 "instead.");
 
+  const unsigned int face_no =
+    (this->dof_access_index ==
+       internal::MatrixFreeFunctions::DoFInfo::dof_access_cell &&
+     this->is_interior_face == false) ?
+      compute_face_no_data()[0] :
+      this->face_no;
+
   if (!internal::FEFaceEvaluationSelector<dim,
                                           fe_degree,
                                           n_q_points_1d,
@@ -7649,7 +7832,7 @@ FEFaceEvaluation<
                           this->active_fe_index,
                           this->first_selected_component,
                           this->cell,
-                          this->face_no,
+                          face_no,
                           this->subface_index,
                           this->dof_access_index,
                           this->face_orientation,
