@@ -276,6 +276,7 @@ namespace Adapter
       }
 
     // read initial readData from preCICE if required for the first time step
+    // FIXME: Data is already exchanged here
     if (precice.isReadDataAvailable())
       {
         precice.readBlockScalarData(read_data_id,
@@ -316,6 +317,9 @@ namespace Adapter
 
     // Here, we obtain data from another participant. Again, we insert the
     // data in our global vector by calling format_precice_to_deal
+
+    // FIXME: isReadDataAvailable returns false, though it should be true for
+    // participant b
     if (precice.hasData(read_data_name, mesh_id))
       if (precice.isReadDataAvailable())
         {
@@ -344,6 +348,7 @@ namespace Adapter
     auto dof_component = coupling_dofs.begin();
     for (int i = 0; i < n_interface_nodes; ++i)
       {
+        AssertIndexRange(i, write_data.size());
         write_data[i] = deal_to_precice[*dof_component];
         ++dof_component;
       }
@@ -359,6 +364,7 @@ namespace Adapter
     auto dof_component = coupling_dofs.begin();
     for (int i = 0; i < n_interface_nodes; ++i)
       {
+        AssertIndexRange(i, read_data.size());
         precice_to_deal[*dof_component] = read_data[i];
         ++dof_component;
       }
