@@ -344,7 +344,7 @@ namespace Adapter
     auto dof_component = coupling_dofs.begin();
     for (int i = 0; i < n_interface_nodes; ++i)
       {
-        write_data[dim * i] = deal_to_precice[*dof_component];
+        write_data[i] = deal_to_precice[*dof_component];
         ++dof_component;
       }
   }
@@ -359,7 +359,7 @@ namespace Adapter
     auto dof_component = coupling_dofs.begin();
     for (int i = 0; i < n_interface_nodes; ++i)
       {
-        precice_to_deal[*dof_component] = read_data[dim * i];
+        precice_to_deal[*dof_component] = read_data[i];
         ++dof_component;
       }
   }
