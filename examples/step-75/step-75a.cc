@@ -13,11 +13,9 @@
  *
  * ---------------------------------------------------------------------
 
-  *
-  * Author:
-  */
-
-
+ *
+ * Author:
+ */
 
 #include <deal.II/base/function.h>
 #include <deal.II/base/logstream.h>
@@ -55,29 +53,28 @@ using namespace dealii;
 struct CouplingParamters
 {
   std::string config_file      = "precice-config.xml";
-  std::string participant_name = "dummy-participant";
-  std::string mesh_name        = "dummy-mesh";
-  std::string write_data_name  = "dummy";
-  std::string read_data_name   = "solution";
+  std::string participant_name = "laplace-solver";
+  std::string mesh_name        = "original-mesh";
+  std::string write_data_name  = "solution";
+  std::string read_data_name   = "dummy";
 };
 
 template <int dim>
-class Step74b
+class Step75a
 {
 public:
-  Step74b();
-  void
-  run();
+  Step75a();
+
+  ~Step75a();
+
+  void run();
 
 private:
-  void
-  make_grid();
-  void
-  setup_system();
-  void
-  assemble_system();
-  void
-  output_results() const;
+  void make_grid();
+  void setup_system();
+  void assemble_system();
+  void solve();
+  void output_results() const;
 
   Triangulation<dim> triangulation;
   FE_Q<dim>          fe;
@@ -101,8 +98,8 @@ template <int dim>
 class RightHandSide : public Function<dim>
 {
 public:
-  virtual double
-  value(const Point<dim> &p, const unsigned int component = 0) const override;
+  virtual double value(const Point<dim> & p,
+                       const unsigned int component = 0) const override;
 };
 
 
@@ -111,14 +108,13 @@ template <int dim>
 class BoundaryValues : public Function<dim>
 {
 public:
-  virtual double
-  value(const Point<dim> &p, const unsigned int component = 0) const override;
+  virtual double value(const Point<dim> & p,
+                       const unsigned int component = 0) const override;
 };
 
 template <int dim>
-double
-RightHandSide<dim>::value(const Point<dim> &p,
-                          const unsigned int /*component*/) const
+double RightHandSide<dim>::value(const Point<dim> &p,
+                                 const unsigned int /*component*/) const
 {
   double return_value = 0.0;
   for (unsigned int i = 0; i < dim; ++i)
@@ -129,9 +125,8 @@ RightHandSide<dim>::value(const Point<dim> &p,
 
 
 template <int dim>
-double
-BoundaryValues<dim>::value(const Point<dim> &p,
-                           const unsigned int /*component*/) const
+double BoundaryValues<dim>::value(const Point<dim> &p,
+                                  const unsigned int /*component*/) const
 {
   return p.square();
 }
@@ -139,21 +134,25 @@ BoundaryValues<dim>::value(const Point<dim> &p,
 
 
 template <int dim>
-Step74b<dim>::Step74b()
+Step75a<dim>::Step75a()
   : fe(1)
   , dof_handler(triangulation)
   , interface_boundary_id(0)
   , adapter(parameters, interface_boundary_id)
 {}
 
-
+// Destructor
+template <int dim>
+Step75a<dim>::~Step75a()
+{
+  dof_handler.clear();
+}
 
 template <int dim>
-void
-Step74b<dim>::make_grid()
+void Step75a<dim>::make_grid()
 {
   GridGenerator::hyper_cube(triangulation, -1, 1, false);
-  triangulation.refine_global(4);
+  triangulation.refine_global(3);
 
   std::cout << "   Number of active cells: " << triangulation.n_active_cells()
             << std::endl
@@ -163,8 +162,7 @@ Step74b<dim>::make_grid()
 
 
 template <int dim>
-void
-Step74b<dim>::setup_system()
+void Step75a<dim>::setup_system()
 {
   dof_handler.distribute_dofs(fe);
 
@@ -185,8 +183,7 @@ Step74b<dim>::setup_system()
 
 
 template <int dim>
-void
-Step74b<dim>::assemble_system()
+void Step75a<dim>::assemble_system()
 {
   QGauss<dim> quadrature_formula(fe.degree + 1);
 
@@ -251,8 +248,20 @@ Step74b<dim>::assemble_system()
 
 
 template <int dim>
-void
-Step74b<dim>::output_results() const
+void Step75a<dim>::solve()
+{
+  SolverControl            solver_control(1000, 1e-12);
+  SolverCG<Vector<double>> solver(solver_control);
+  solver.solve(system_matrix, solution, system_rhs, PreconditionIdentity());
+
+  std::cout << "   " << solver_control.last_step()
+            << " CG iterations needed to obtain convergence." << std::endl;
+}
+
+
+
+template <int dim>
+void Step75a<dim>::output_results() const
 {
   DataOut<dim> data_out;
 
@@ -261,46 +270,40 @@ Step74b<dim>::output_results() const
 
   data_out.build_patches();
 
-  std::ofstream output(dim == 2 ? "mapped-solution-2d.vtk" :
-                                  "mapped-solution-3d.vtk");
+  std::ofstream output(dim == 2 ? "computed-solution-2d.vtk" :
+                                  "computed-solution-3d.vtk");
   data_out.write_vtk(output);
 }
 
 
 
 template <int dim>
-void
-Step74b<dim>::run()
+void Step75a<dim>::run()
 {
-  //  std::cout << "Solving problem in " << dim << " space dimensions."
-  //            << std::endl;
+  std::cout << "Solving problem in " << dim << " space dimensions."
+            << std::endl;
 
   make_grid();
   setup_system();
   assemble_system();
-  adapter.initialize(dof_handler, dummy_vector, solution);
-
-  //  solve();
-  if (adapter.precice.isCouplingOngoing())
+  adapter.initialize(dof_handler, solution, dummy_vector);
+  while (adapter.precice.isCouplingOngoing())
     {
-      adapter.advance(dummy_vector, solution, 1);
+      solve();
+
+      adapter.advance(solution, dummy_vector, 1);
       output_results();
     }
-
-  adapter.precice.finalize();
 }
 
 
 
-int
-main(int argc, char **argv)
+int main(int argc, char **argv)
 {
-
   Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv, 1);
-
   try
     {
-      Step74b<3> laplace_problem_3d;
+      Step75a<2> laplace_problem_3d;
       laplace_problem_3d.run();
     }
   catch (std::exception &exc)

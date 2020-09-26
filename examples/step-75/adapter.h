@@ -34,12 +34,12 @@ namespace Adapter
      */
     Adapter(const ParameterClass &parameters,
             const unsigned int    deal_boundary_interface_id);
-    ~Adapter()
-    {
-      precice.finalize();
 
-
-    }
+    /**
+     * @brief      Destructor, which additionally finalizes preCICE
+     *
+     */
+    ~Adapter();
 
     /**
      * @brief      Initializes preCICE and passes all relevant data to preCICE
@@ -58,10 +58,9 @@ namespace Adapter
      *             data will just represent the initial condition of other
      *             participants.
      */
-    void
-    initialize(const DoFHandler<dim> &dof_handler,
-               const VectorType &     deal_to_precice,
-               VectorType &           precice_to_deal);
+    void initialize(const DoFHandler<dim> &dof_handler,
+                    const VectorType &     deal_to_precice,
+                    VectorType &           precice_to_deal);
 
     /**
      * @brief      Advances preCICE after every timestep, converts data formats
@@ -76,10 +75,9 @@ namespace Adapter
      * @param[in]  computed_timestep_length Length of the timestep used by
      *             the solver.
      */
-    void
-    advance(const VectorType &deal_to_precice,
-            VectorType &      precice_to_deal,
-            const double      computed_timestep_length);
+    void advance(const VectorType &deal_to_precice,
+                 VectorType &      precice_to_deal,
+                 const double      computed_timestep_length);
 
     /**
      * @brief public precice solverinterface
@@ -109,9 +107,7 @@ namespace Adapter
 
     // Dof IndexSets of the global deal.II vectors, containing relevant
     // coupling dof indices
-    IndexSet coupling_dofs_x_comp;
-    //    IndexSet coupling_dofs_y_comp;
-    //    IndexSet coupling_dofs_z_comp;
+    IndexSet coupling_dofs;
 
     // Data containers which are passed to preCICE in an appropriate preCICE
     // specific format
@@ -134,8 +130,7 @@ namespace Adapter
      *        to be consistent with the order of the initially passed vertices
      *        coordinates.
      */
-    void
-    format_deal_to_precice(const VectorType &deal_to_precice);
+    void format_deal_to_precice(const VectorType &deal_to_precice);
 
     /**
      * @brief format_precice_to_deal Takes the std::vector obtained by preCICE
@@ -152,8 +147,7 @@ namespace Adapter
      *        to be consistent with the order of the initially passed vertices
      *        coordinates.
      */
-    void
-    format_precice_to_deal(VectorType &precice_to_deal) const;
+    void format_precice_to_deal(VectorType &precice_to_deal) const;
   };
 
 
@@ -175,8 +169,15 @@ namespace Adapter
 
 
   template <int dim, typename VectorType, typename ParameterClass>
-  void
-  Adapter<dim, VectorType, ParameterClass>::initialize(
+  Adapter<dim, VectorType, ParameterClass>::~Adapter()
+  {
+    precice.finalize();
+  }
+
+
+
+  template <int dim, typename VectorType, typename ParameterClass>
+  void Adapter<dim, VectorType, ParameterClass>::initialize(
     const DoFHandler<dim> &dof_handler,
     const VectorType &     deal_to_precice,
     VectorType &           precice_to_deal)
@@ -200,17 +201,14 @@ namespace Adapter
     std::set<types::boundary_id> couplingBoundary;
     couplingBoundary.insert(deal_boundary_interface_id);
 
-    const FEValuesExtractors::Scalar x_displacement(0);
-
     DoFTools::extract_boundary_dofs(dof_handler,
-                                    dof_handler.get_fe().component_mask(
-                                      x_displacement),
-                                    coupling_dofs_x_comp,
+                                    ComponentMask(),
+                                    coupling_dofs,
                                     couplingBoundary);
 
     // Comment about scalar problems
 
-    n_interface_nodes = coupling_dofs_x_comp.n_elements();
+    n_interface_nodes = coupling_dofs.n_elements();
 
     std::cout << "\t Number of coupling nodes:     " << n_interface_nodes
               << std::endl;
@@ -242,7 +240,7 @@ namespace Adapter
 
     // preCICE expects all data in the format [x0, y0, z0, x1, y1 ...]
     int node_position_iterator = 0;
-    for (auto element : coupling_dofs_x_comp)
+    for (auto element : coupling_dofs)
       {
         for (int i = 0; i < dim; ++i)
           interface_nodes_positions[node_position_iterator * dim + i] =
@@ -261,40 +259,38 @@ namespace Adapter
     precice.initialize();
 
     // write initial writeData to preCICE if required
-    //    if
-    //    (precice.isActionRequired(precice::constants::actionWriteInitialData()))
-    //      {
-    //        // store initial write_data for precice in write_data
-    //        format_deal_to_precice(deal_to_precice);
+    if (precice.isActionRequired(precice::constants::actionWriteInitialData()))
+      {
+        // store initial write_data for precice in write_data
+        format_deal_to_precice(deal_to_precice);
 
-    //        precice.writeBlockScalarData(write_data_id,
-    //                                     n_interface_nodes,
-    //                                     interface_nodes_ids.data(),
-    //                                     write_data.data());
+        precice.writeBlockScalarData(write_data_id,
+                                     n_interface_nodes,
+                                     interface_nodes_ids.data(),
+                                     write_data.data());
 
-    //        precice.markActionFulfilled(
-    //          precice::constants::actionWriteInitialData());
+        precice.markActionFulfilled(
+          precice::constants::actionWriteInitialData());
 
-    //        precice.initializeData();
-    //      }
+        precice.initializeData();
+      }
 
     // read initial readData from preCICE if required for the first time step
-    //    if (precice.isReadDataAvailable())
-    //      {
-    //        precice.readBlockScalarData(read_data_id,
-    //                                    n_interface_nodes,
-    //                                    interface_nodes_ids.data(),
-    //                                    read_data.data());
+    if (precice.isReadDataAvailable())
+      {
+        precice.readBlockScalarData(read_data_id,
+                                    n_interface_nodes,
+                                    interface_nodes_ids.data(),
+                                    read_data.data());
 
-    //        format_precice_to_deal(precice_to_deal);
-    //      }
+        format_precice_to_deal(precice_to_deal);
+      }
   }
 
 
 
   template <int dim, typename VectorType, typename ParameterClass>
-  void
-  Adapter<dim, VectorType, ParameterClass>::advance(
+  void Adapter<dim, VectorType, ParameterClass>::advance(
     const VectorType &deal_to_precice,
     VectorType &      precice_to_deal,
     const double      computed_timestep_length)
@@ -307,9 +303,7 @@ namespace Adapter
     if (precice.hasData(write_data_name, mesh_id))
       if (precice.isWriteDataRequired(computed_timestep_length))
         {
-          std::cout << "TRUE1" << std::endl;
           format_deal_to_precice(deal_to_precice);
-          std::cout << "TRUE2" << std::endl;
           precice.writeBlockScalarData(write_data_id,
                                        n_interface_nodes,
                                        interface_nodes_ids.data(),
@@ -325,22 +319,19 @@ namespace Adapter
     if (precice.hasData(read_data_name, mesh_id))
       if (precice.isReadDataAvailable())
         {
-          std::cout << "TRUE3" << std::endl;
           precice.readBlockScalarData(read_data_id,
                                       n_interface_nodes,
                                       interface_nodes_ids.data(),
                                       read_data.data());
 
           format_precice_to_deal(precice_to_deal);
-          std::cout << "TRUE4" << std::endl;
         }
   }
 
 
 
   template <int dim, typename VectorType, typename ParameterClass>
-  void
-  Adapter<dim, VectorType, ParameterClass>::format_deal_to_precice(
+  void Adapter<dim, VectorType, ParameterClass>::format_deal_to_precice(
     const VectorType &deal_to_precice)
   {
     // Assumption: x index is in the same position as y index in each IndexSet
@@ -350,47 +341,26 @@ namespace Adapter
     // Therefore, an index for the respective x component dof is not always
     // followed by an index on the same position for the y component
 
-    auto x_comp = coupling_dofs_x_comp.begin();
-    //    auto y_comp = coupling_dofs_y_comp.begin();
-    //    auto z_comp = coupling_dofs_z_comp.begin();
-
+    auto dof_component = coupling_dofs.begin();
     for (int i = 0; i < n_interface_nodes; ++i)
       {
-        write_data[dim * i] = deal_to_precice[*x_comp];
-        //        write_data[(dim * i) + 1] = deal_to_precice[*y_comp];
-        ++x_comp;
-        //        ++y_comp;
-        //        if (dim == 3)
-        //          {
-        //            write_data[(dim * i) + 2] = deal_to_precice[*z_comp];
-        //            ++z_comp;
-        //          }
+        write_data[dim * i] = deal_to_precice[*dof_component];
+        ++dof_component;
       }
   }
 
 
 
   template <int dim, typename VectorType, typename ParameterClass>
-  void
-  Adapter<dim, VectorType, ParameterClass>::format_precice_to_deal(
+  void Adapter<dim, VectorType, ParameterClass>::format_precice_to_deal(
     VectorType &precice_to_deal) const
   {
     // This is the opposite direction as above. See comment there.
-    auto x_comp = coupling_dofs_x_comp.begin();
-    //    auto y_comp = coupling_dofs_y_comp.begin();
-    //    auto z_comp = coupling_dofs_z_comp.begin();
-
+    auto dof_component = coupling_dofs.begin();
     for (int i = 0; i < n_interface_nodes; ++i)
       {
-        precice_to_deal[*x_comp] = read_data[dim * i];
-        //        precice_to_deal[*y_comp] = read_data[(dim * i) + 1];
-        ++x_comp;
-        //        ++y_comp;
-        //        if (dim == 3)
-        //          {
-        //            precice_to_deal[*z_comp] = read_data[(dim * i) + 2];
-        //            ++z_comp;
-        //          }
+        precice_to_deal[*dof_component] = read_data[dim * i];
+        ++dof_component;
       }
   }
 } // namespace Adapter
